@@ -382,17 +382,41 @@ void isr(bmp24& dst, bmpimage& src, int d) {
     }
 }
 
+void printhelp() {
+  std::cerr <<
+  "ISR - Image Stitch Recognize v.0.0.1 (C) Porthirios, 2015\n"
+  "Программа распознавания черно-белых схем для вышивки и перевода их в цветную картинку\n"
+  "Использование: isr ключи исходный_файл.bmp\n"
+  "Ключи:\n"
+  "--help - этот текст\n"
+  "-f float - масштаб значков (по умолчанию 0.6)\n"
+  "-d int - ширина поиска значков (по умолчанию 2)\n"
+  "-o file.bmp - выходной файл (по умолчанию icon.bmp)\n"
+  "-w int - ширина схемы (по умолчанию 120)\n"
+  "-h int - высота схемы (по умолчанию 160)\n"
+  "-b digits - метод сглаживания (пока доступны 1-4; можно применять несколько подряд\n"
+  "Схема должна быть предварительно кадрирована, и в текущем каталоге должна находиться \nпапка sign с образцами значков, имена файлов со значками соответствуют кодам цветов по каталогу DMC\n";
+}
+
 main(int argc, const char** argv) {
   float coef=0.6;
   int dis=2, w=120, h=160;
   bmpimage img;
   const char* imgname=NULL, *outname="icon.bmp", *blur="";
+  if(argc<2) {
+    printhelp();
+    return 0;
+  }
   for(int i=1; i<argc; i++)
     if(!strcmp(argv[i],"-f")) coef=atof(argv[++i]); else
     if(!strcmp(argv[i],"-d")) dis=atoi(argv[++i]); else
     if(!strcmp(argv[i],"-o")) outname=argv[++i]; else
     if(!strcmp(argv[i],"-w")) w=atoi(argv[++i]); else
     if(!strcmp(argv[i],"-h")) h=atoi(argv[++i]); else
+    if(!strcmp(argv[i],"--help")) {
+      printhelp();
+      return 0;
+    } else
     if(!strcmp(argv[i],"-b")) blur=argv[++i];
     else imgname=argv[i];
   int c=load_dmctab(dmc_tab,"DMC-tab.txt");
