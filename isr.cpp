@@ -273,6 +273,40 @@ void brightness(bmpimage& img) {
       img[i][j]=unsigned((img[i][j]-mi)*k);
 }
 
+void brightness_a(bmpimage& img) {
+  int cx=(img.maxx()>>4)+1,cy=(img.maxy()>>4)+1;
+  std::pair<unsigned char, unsigned char> mm[cy][cx];
+  for(int y=0; y<img.sizey(); y+=16)
+    for(int x=0; x<img.sizex(); x+=16) {
+      cx=x>>4; cy=y>>4;
+      mm[y>>4][x>>4]=std::pair<unsigned char, unsigned char>((unsigned char)(255),(unsigned char)(0));
+      for(int i=0; i<16 && i+y<img.sizey(); i++)
+	for(int j=0; j<16 && j+x<img.sizex(); j++) {
+	  if(img[i+y][j+x]<mm[cy][cx].first)
+	    mm[cy][cx].first=img[i+y][j+x];
+	  if(img[i+y][j+x]>mm[cy][cx].second)
+	    mm[cy][cx].second=img[i+y][j+x];
+	}
+    }
+  for(int y=0; y<img.sizey(); y+=16)
+    for(int x=0; x<img.sizex(); x+=16) {
+      cx=x>>4; cy=y>>4;
+      unsigned min=mm[cy][cx].first, max=mm[cy][cx].second;
+      for(int i=cy-1; i<=cy+1; i++)
+	if(i>=0 && (i<<4)<img.sizey())
+	  for(int j=cx-1; j<=cx+1; j++)
+	    if(j>=0 && (j<<4)<img.sizex()) {
+	      if(mm[i][j].first<min) min=mm[i][j].first;
+	      if(mm[i][j].second>max) max=mm[i][j].second;
+	    }
+      float a=min,b=255/(max-a);
+      for(int i=0; i<16 && i+y<img.sizey(); i++)
+	for(int j=0; j<16 && j+x<img.sizex(); j++) {
+	  img[y+i][x+j]=(unsigned char)((img[y+i][x+j]-a)*b);
+	}
+    }
+}
+
 struct dmc_color {
   int code;
   unsigned char red, green, blue;
@@ -361,8 +395,10 @@ int load_signs(std::vector<sign>& tab, const char* path, float sc, const char* b
 
 std::vector<sign> sign_tab;
 
-void isr(bmp24& dst, bmpimage& src, int d) {
+void isr(bmp24& dst, bmpimage& src, int d, std::vector<int>& sp) {
   float stepx=float(src.sizex())/dst.sizex(), stepy=float(src.sizey())/dst.sizey();
+  sp.clear();
+  sp.insert(sp.begin(),sign_tab.size(),0);
   for(int i=0; i<dst.sizey(); i++)
     for(int j=0; j<dst.sizex(); j++) {
       float cx=(j+0.5)*stepx, cy=(i+0.5)*stepy, dis=255.;
@@ -379,12 +415,64 @@ void isr(bmp24& dst, bmpimage& src, int d) {
           }
       }
       dst.pset(j,i,sign_tab[c].color->color());
+      sp[c]++;
     }
+}
+
+int spectrum(bmpimage& img, int (&sp)[256]) {
+  bzero(sp,256*sizeof(int));
+  for(int i=0; i<img.sizey(); i++)
+    for(int j=0; j<img.sizex(); j++)
+      sp[img[i][j]]++;
+  int m=0;
+  for(int c=0; c<256; c++)
+    if(m<sp[c]) m=sp[c];
+  return m;
+}
+
+void bmpspectrum(bmpimage& img, bmpimage& spimg) {
+  int sp[256];
+  int m=spectrum(img,sp);
+  spimg.resize(256,256);
+  for(int c=0; c<256; c++) {
+    int cc=int(sp[c]*256./m);
+    for(int i=0; i<cc; i++)
+      spimg.pset(c,i,0);
+    for(int i=cc; i<256; i++)
+      spimg.pset(c,i,-1);
+  }
+}
+
+void grid(bmpimage& src, bmpimage& cell, bmpimage& dst) {
+  int h=src.sizey()-cell.maxy(), w=src.sizex()-cell.maxx();
+  dst.resize(w,h);
+  for(int c=0; c<256; c++)
+    dst.setcolor(c,c,c,c);
+  float min=256.,max=0.,minimax=256.,maximin=0.;
+  std::pair<float,float> cmm[(src.sizey()+cell.maxy())/cell.sizey()][src.sizex()+cell.maxx()/cell.sizex()];
+  for(int y=0; y<h; y++)
+    for(int x=0; x<w; x++) {
+      int cx=x/cell.sizex(), cy=y/cell.sizey();
+      if(!(x%cell.sizex()) && !(y%cell.sizey()))
+        cmm[cy][cx]=std::pair<float,float>(256.,0.);
+      float d=cmpdark(src,cell,x,y);
+      if(d<cmm[cy][cx].first) cmm[cy][cx].first=d;
+      if(d>cmm[cy][cx].second) cmm[cy][cx].second=d;
+      if(d<min) min=d;
+      if(d>max) max=d;
+      dst.pset(x,y,int((d-4.5)/33.*255));
+    }
+  for(int y=0; y<sizeof(cmm)/sizeof(*cmm); y++)
+    for(int x=0; x<sizeof(*cmm)/sizeof(**cmm); x++) {
+      if(cmm[y][x].first>maximin) maximin=cmm[y][x].first;
+      if(cmm[y][x].second<minimax) minimax=cmm[y][x].second;
+    }
+  std::cout << "min=" << min << "\tmax=" << max << "\nminimax=" << minimax << "\tmaximin=" << maximin << '\n';
 }
 
 void printhelp() {
   std::cerr <<
-  "ISR - Image Stitch Recognize v.0.0.1 (C) Porthirios, 2015\n"
+  "ISR - Image Stitch Recognize v.0.0.2 (C) Porthirios, 2015\n"
   "Программа распознавания черно-белых схем для вышивки и перевода их в цветную картинку\n"
   "Использование: isr ключи исходный_файл.bmp\n"
   "Ключи:\n"
@@ -436,8 +524,17 @@ main(int argc, const char** argv) {
   img.load(imgname);
   runblur(img,blur);
   bmp24 icon(w,h);
-  brightness(img);
-  isr(icon,img,dis);
+  brightness_a(img);
+//  img.save("src.bmp");
+/*  bmpimage cell,gr(8);
+  cell.load("sign/3770.bmp");
+  grid(img,cell,gr);
+  gr.save("grid.bmp");*/
+  std::vector<int> sp;
+  isr(icon,img,dis,sp);
   icon.save(outname);
+  for(int c=0; c<sp.size(); c++)
+    if(sp[c])
+      std::cout << sign_tab[c].color->code << '\t' << sign_tab[c].color->name << '\t' << sp[c] << " ст.\n";
   return 0;
 }
