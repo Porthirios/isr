@@ -96,7 +96,7 @@ void bmpimage::clear()
   for(int i=0; i<height; i++) delete data[i];
   delete data;
   data=NULL;
-  height=width=0;
+  height=width=rsize=0;
 }
 
 void bmpimage::resize(int w, int h)
@@ -108,6 +108,8 @@ void bmpimage::resize(int w, int h)
     data[i]=(unsigned char*)realloc(data,((rsize+15)&~15)*sizeof(unsigned char));
   while(height<h)
     data[height++]=new unsigned char[(rsize+15)&~15];
+  size=rsize*height;
+  flen=offs+size;
 }
 
 bmpimage* rotate(bmpimage& src, double angle)
@@ -133,6 +135,7 @@ void bmpimage::setcolor(int c, int r, int g, int b)
   palette[c][0]=r;
   palette[c][1]=g;
   palette[c][2]=b;
+  palette[c][3]=255;
 }
 
 bmpimage* scale(bmpimage& src, double f) {
@@ -227,4 +230,16 @@ void bmp24::resize(int w, int h, unsigned bc) {
     for(int x=0; x<width; x++)
       pset(x,y,bc);
   flen=offs+size;
+}
+
+void bmpimage::bar(int x1, int y1, int x2, int y2, unsigned c) {
+  for(int y=y1; y<=y2; y++)
+    for(int x=x1; x<=x2; x++)
+      pset(x,y,c);
+}
+
+void bmp24::bar(int x1, int y1, int x2, int y2, unsigned c) {
+  for(int y=y1; y<=y2; y++)
+    for(int x=x1; x<=x2; x++)
+      pset(x,y,c);
 }

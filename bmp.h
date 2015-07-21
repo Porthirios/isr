@@ -43,6 +43,7 @@ public:
   unsigned char* operator[](int n) {
     return data[n];
   }
+  void bar(int x1, int y1, int x2, int y2, unsigned c);
 };
 
 enum draw_mode { COPY_PUT=0, XOR_PUT=1, OR_PUT=2, AND_PUT=3 };
@@ -60,6 +61,7 @@ public:
   void pset(int x, int y, unsigned c, draw_mode mode=COPY_PUT);
   void hline(int l, int r, int y, unsigned c, draw_mode mode=COPY_PUT);
   void vline(int x, int t, int b, unsigned c, draw_mode mode=COPY_PUT);
+  void bar(int x1, int y1, int x2, int y2, unsigned c);
   void resize(int w, int h, unsigned bc);
   void clear(unsigned bc);
   int maxx() const

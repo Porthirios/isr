@@ -109,48 +109,6 @@ float compare(bmpimage& a, bmpimage& b, int sx, int sy) {
   return float(sum[0]+sum[2])/((l+17)*h);
 }
 
-float cmpdark(bmpimage& a, bmpimage& b, int sx, int sy) {
-  int x0=(sx>=0?sx:0), y0=(sy>=0?sy:0);
-  sx-=x0; sy-=y0;
-  int l=(a.sizex()<b.sizex()+x0?a.sizex()-x0:b.sizex()+sx)-1;
-  int h=(a.sizey()<b.sizey()+y0?a.sizey()-y0:b.sizey()+sy);
-  asm (
-    "pxor %%xmm0, %%xmm0\n\t"
-    "and $15, %1\n\t"
-    "sub $15, %1\n\t"
-    "neg %1\n\t"
-    "movdqu (%0,%1,1),%%xmm1\n\t"
-    : : "r"(mask),"r"(l) : "%xmm0","%xmm1"
-  );
-  l-=16;
-  for(int i=0; i<h; i++) {
-    register unsigned char* aptr=a[i+y0]+x0, *bptr=b[i-sy]-sx;
-    register int j;
-    for(j=0; j<l; j+=16)
-      asm (
-        "movdqu (%0,%2,1), %%xmm2\n\t"
-        "movdqu (%1,%2,1), %%xmm3\n\t"
-        "pmaxub %%xmm3, %%xmm2\n\t"
-        "psadbw %%xmm3, %%xmm2\n\t"
-        "paddq %%xmm2, %%xmm0\n\t"
-        : : "r"(aptr),"r"(bptr),"r"(j): "%xmm0","%xmm2","%xmm3"
-      );
-    asm (
-        "movdqu (%0,%2,1), %%xmm2\n\t"
-        "movdqu (%1,%2,1), %%xmm3\n\t"
-        "pand %%xmm1, %%xmm2\n\t"
-        "pand %%xmm1, %%xmm3\n\t"
-        "pmaxub %%xmm3, %%xmm2\n\t"
-        "psadbw %%xmm3, %%xmm2\n\t"
-        "paddq %%xmm2, %%xmm0\n\t"
-        : : "r"(aptr),"r"(bptr),"r"(j): "%xmm0","%xmm1","%xmm2","%xmm3"
-    );
-  }
-  unsigned sum[4];
-  asm("movdqu %%xmm0, %0": :"m"(*sum):"%xmm0");
-  return float(sum[0]+sum[2])/((l+17)*h);
-}
-
 void blur1(bmpimage& img) {
   bmpimage tmp(img.debth(),img.maxx()+1,img.maxy()+1);
   int l=img.maxx();
@@ -395,28 +353,43 @@ int load_signs(std::vector<sign>& tab, const char* path, float sc, const char* b
 
 std::vector<sign> sign_tab;
 
-void isr(bmp24& dst, bmpimage& src, int d, std::vector<int>& sp) {
-  float stepx=float(src.sizex())/dst.sizex(), stepy=float(src.sizey())/dst.sizey();
+void isr(bmp24& dst, bmpimage& src, int d, std::vector<int>& sp, int sb=1) {
+  int w=dst.sizex()/sb, h=dst.sizey()/sb;
+  float stepx=float(src.sizex())/w, stepy=float(src.sizey())/h;
+  float qavg=0, qmin=1., qmax=0.;
+  int unsure=0;
   sp.clear();
   sp.insert(sp.begin(),sign_tab.size(),0);
-  for(int i=0; i<dst.sizey(); i++)
-    for(int j=0; j<dst.sizex(); j++) {
-      float cx=(j+0.5)*stepx, cy=(i+0.5)*stepy, dis=255.;
+//  for(int s=0; s<sign_tab.size(); s++)
+//    dst.setcolor(s+1,sign_tab[s].color->red,sign_tab[s].color->green,sign_tab[s].color->blue);
+  for(int i=0; i<h; i++)
+    for(int j=0; j<w; j++) {
+      float cx=(j+0.5)*stepx, cy=(i+0.5)*stepy, dis=255., last=255.;
       int c=0;
       for(int s=0; s<sign_tab.size(); s++) {
         int x=int(cx-sign_tab[s].sample->sizex()/2.), y=int(cy-sign_tab[s].sample->sizey()/2.);
+        float md=255.;
         for(int sy=-d; sy<=d; sy++)
           for(int sx=-d; sx<=d; sx++) {
             float cd=compare(src,*sign_tab[s].sample,x+sx,y+sy);
-            if(cd<dis) {
-              dis=cd;
-              c=s;
-            }
+            if(cd<md) md=cd;
           }
+        if(dis>md) {
+          if(dis<last) last=dis;
+          dis=md;
+          c=s;
+        }
       }
-      dst.pset(j,i,sign_tab[c].color->color());
+      dst.bar(j*sb,i*sb,(j+1)*sb-1,(i+1)*sb-1,sign_tab[c].color->color());
       sp[c]++;
+      float q=1.-dis/last;
+      qavg+=q;
+      if(q<qmin) qmin=q;
+      if(q>qmax) qmax=q;
+      if(q<0.05) unsure++;
     }
+  std::cerr << "Точность распознавания: min=" << qmin << "\tmax=" << qmax << "\tavg=" << qavg/(w*h) << '\n'
+  << "Неуверенно распознано " << unsure << " знаков\n";
 }
 
 int spectrum(bmpimage& img, int (&sp)[256]) {
@@ -443,36 +416,9 @@ void bmpspectrum(bmpimage& img, bmpimage& spimg) {
   }
 }
 
-void grid(bmpimage& src, bmpimage& cell, bmpimage& dst) {
-  int h=src.sizey()-cell.maxy(), w=src.sizex()-cell.maxx();
-  dst.resize(w,h);
-  for(int c=0; c<256; c++)
-    dst.setcolor(c,c,c,c);
-  float min=256.,max=0.,minimax=256.,maximin=0.;
-  std::pair<float,float> cmm[(src.sizey()+cell.maxy())/cell.sizey()][src.sizex()+cell.maxx()/cell.sizex()];
-  for(int y=0; y<h; y++)
-    for(int x=0; x<w; x++) {
-      int cx=x/cell.sizex(), cy=y/cell.sizey();
-      if(!(x%cell.sizex()) && !(y%cell.sizey()))
-        cmm[cy][cx]=std::pair<float,float>(256.,0.);
-      float d=cmpdark(src,cell,x,y);
-      if(d<cmm[cy][cx].first) cmm[cy][cx].first=d;
-      if(d>cmm[cy][cx].second) cmm[cy][cx].second=d;
-      if(d<min) min=d;
-      if(d>max) max=d;
-      dst.pset(x,y,int((d-4.5)/33.*255));
-    }
-  for(int y=0; y<sizeof(cmm)/sizeof(*cmm); y++)
-    for(int x=0; x<sizeof(*cmm)/sizeof(**cmm); x++) {
-      if(cmm[y][x].first>maximin) maximin=cmm[y][x].first;
-      if(cmm[y][x].second<minimax) minimax=cmm[y][x].second;
-    }
-  std::cout << "min=" << min << "\tmax=" << max << "\nminimax=" << minimax << "\tmaximin=" << maximin << '\n';
-}
-
 void printhelp() {
   std::cerr <<
-  "ISR - Image Stitch Recognize v.0.0.2 (C) Porthirios, 2015\n"
+  "ISR - Image Stitch Recognize v.0.0.3 (C) Porthirios, 2015\n"
   "Программа распознавания черно-белых схем для вышивки и перевода их в цветную картинку\n"
   "Использование: isr ключи исходный_файл.bmp\n"
   "Ключи:\n"
@@ -486,9 +432,42 @@ void printhelp() {
   "Схема должна быть предварительно кадрирована, и в текущем каталоге должна находиться \nпапка sign с образцами значков, имена файлов со значками соответствуют кодам цветов по каталогу DMC\n";
 }
 
+bmpimage *img_flt;
+
+void filter() {
+  int mx=sign_tab[0].sample->sizex(), my=sign_tab[0].sample->sizey();
+  for(int i=1; i<sign_tab.size(); i++) {
+    if(mx>sign_tab[i].sample->sizex())
+      mx=sign_tab[i].sample->sizex();
+    if(my>sign_tab[i].sample->sizey())
+      my=sign_tab[i].sample->sizey();
+  }
+  unsigned sad[my][mx];
+  bzero(sad,sizeof(sad));
+  for(int i=1; i<sign_tab.size(); i++) {
+    int sh1=(sign_tab[i].sample->sizex()-mx)/2, sv1=(sign_tab[i].sample->sizey()-my)/2;
+    for(int j=0; j<i; j++) {
+      int sh2=(sign_tab[j].sample->sizex()-mx)/2, sv2=(sign_tab[j].sample->sizey()-my)/2;
+      for(int y=0; y<my; y++)
+        for(int x=0; x<mx; x++)
+          sad[y][x]+=abs(int((*sign_tab[i].sample)[y+sv1][x+sh1])-int((*sign_tab[j].sample)[y+sv2][x+sh2]));
+    }
+  }
+  unsigned min=sad[0][0],max=0;
+  for(int y=0; y<my; y++)
+    for(int x=0; x<mx; x++) {
+      if(min>sad[y][x]) min=sad[y][x];
+      if(max<sad[y][x]) max=sad[y][x];
+    }
+  img_flt=new bmpimage(8,mx,my);
+  for(int y=0; y<my; y++)
+    for(int x=0; x<mx; x++)
+      (*img_flt)[y][x]=(unsigned char)(float(sad[y][x]-min)*255/(max-min));
+}
+
 main(int argc, const char** argv) {
   float coef=0.6;
-  int dis=2, w=120, h=160;
+  int dis=2, w=120, h=160, s=1;
   bmpimage img;
   const char* imgname=NULL, *outname="icon.bmp", *blur="";
   if(argc<2) {
@@ -501,6 +480,7 @@ main(int argc, const char** argv) {
     if(!strcmp(argv[i],"-o")) outname=argv[++i]; else
     if(!strcmp(argv[i],"-w")) w=atoi(argv[++i]); else
     if(!strcmp(argv[i],"-h")) h=atoi(argv[++i]); else
+    if(!strcmp(argv[i],"-s")) s=atoi(argv[++i]); else
     if(!strcmp(argv[i],"--help")) {
       printhelp();
       return 0;
@@ -509,32 +489,29 @@ main(int argc, const char** argv) {
     else imgname=argv[i];
   int c=load_dmctab(dmc_tab,"DMC-tab.txt");
   if(c<=0) {
-    puts("Не удалось загрузить таблицу цветов DMC");
+    std::cerr << "Не удалось загрузить таблицу цветов DMC\n";
     return 2;
-  } else printf("Таблица цветов DMC %d записей\n", c);
+  } else std::cerr << "Таблица цветов DMC " << c << "записей\n";
   c=load_signs(sign_tab,"sign",coef,blur);
   if(c<=0) {
-    puts("Не удалось загрузить сигнатуру");
+    std::cerr << "Не удалось загрузить сигнатуру\n";
     return 3;
-  } else printf("Загружено %d знаков\n",c);
+  } else std::cerr << "Загружено " << c << " знаков\n";
+//  filter();
+//  img_flt->save("filter.bmp");
   if(!imgname) {
-    puts("Не указано имя файла");
+    std::cerr << "Не указано имя файла\n";
     return 1;
   }
   img.load(imgname);
   runblur(img,blur);
-  bmp24 icon(w,h);
+  bmp24 icon(w*s,h*s);
   brightness_a(img);
-//  img.save("src.bmp");
-/*  bmpimage cell,gr(8);
-  cell.load("sign/3770.bmp");
-  grid(img,cell,gr);
-  gr.save("grid.bmp");*/
   std::vector<int> sp;
-  isr(icon,img,dis,sp);
+  isr(icon,img,dis,sp,s);
   icon.save(outname);
   for(int c=0; c<sp.size(); c++)
     if(sp[c])
       std::cout << sign_tab[c].color->code << '\t' << sign_tab[c].color->name << '\t' << sp[c] << " ст.\n";
-  return 0;
+    return 0;
 }
