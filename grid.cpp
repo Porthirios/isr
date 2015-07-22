@@ -1,5 +1,5 @@
 #include <iostream>
-#include "bmp.h"
+#include "isr.h"
 
 float cmpdark(bmpimage& a, bmpimage& b, int sx, int sy) {
   int x0=(sx>=0?sx:0), y0=(sy>=0?sy:0);
